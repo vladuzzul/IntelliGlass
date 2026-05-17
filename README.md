@@ -4,6 +4,7 @@ IntelliGlass este o aplicație de smart mirror construită peste MagicMirror, ad
 
 - `RemoteApp`: interfața web de configurare accesibilă din rețea.
 - `MMM-AIVoiceAssistant`: modulul de asistent vocal, numit în configurare `Jarvis`.
+- `MMM-SpotifyPlayer`: modulul separat de Spotify now-playing, alimentat prin RemoteApp.
 - `finger.py`: controllerul de gesturi cu cameră, OpenCV/Picamera2 și MediaPipe.
 
 Proiectul este încă un MagicMirror complet, deci păstrează serverul Express, clientul Electron, sistemul de module, Socket.IO și testele upstream.
@@ -94,6 +95,7 @@ Configurația curentă activează următoarele module:
 - `newsfeed`: fluxuri RSS, momentan Ziare.com și Brașov Știri.
 - `MMM-KeyBindings`: transformă tastele în notificări pentru module.
 - `MMM-AIVoiceAssistant`: asistent vocal AI.
+- `MMM-SpotifyPlayer`: afișează piesa Spotify activă.
 - `MMM-QRCode`: afișează QR către configuratorul RemoteApp.
 - `MMM-Carousel`: împarte oglinda în slide-uri navigabile.
 
@@ -137,6 +139,7 @@ Paginile RemoteApp:
 | `news.html`      | Două feed-uri RSS configurabile.                        |
 | `calendar.html`  | URL calendar iCal și complimente.                       |
 | `assistant.html` | Model OpenAI, STT, activare, prompt, UI și TTS.         |
+| `spotify.html`   | Conectare Spotify și setări pentru modulul de redare.   |
 | `network.html`   | IP, URL RemoteApp și numărul de clienți conectați.      |
 | `settings.html`  | Limbă și format oră.                                    |
 
@@ -225,7 +228,11 @@ Serverul principal este în `js/server.js`.
 | `/remote/source-health` | `POST` | Verifică disponibilitatea URL-urilor RSS și calendar.                               |
 | `/remote/command`       | `POST` | Acceptă `reload` sau `apply_all` și emite `RELOAD`.                                 |
 | `/remote/key`           | `POST` | Acceptă taste permise și emite `REMOTE_KEY`.                                        |
-| `/remote/config`        | `POST` | Actualizează vreme, calendar, RSS, complimente, locale și AI în `config/config.js`. |
+| `/remote/spotify/auth`  | `POST` | Primește tokenul temporar Spotify obținut din RemoteApp.                            |
+| `/remote/spotify/auth`  | `DELETE` | Șterge tokenul Spotify păstrat temporar de server.                                |
+| `/remote/spotify/status` | `GET` | Returnează starea conexiunii Spotify curente.                                       |
+| `/remote/spotify/now-playing` | `GET` | Proxy pentru piesa Spotify activă folosit de modulul `MMM-SpotifyPlayer`.      |
+| `/remote/config`        | `POST` | Actualizează vreme, calendar, RSS, complimente, locale, AI și Spotify în `config/config.js`. |
 | `/reload`               | `GET`  | Emite `RELOAD` către clienți.                                                       |
 | `/version`              | `GET`  | Returnează versiunea MagicMirror.                                                   |
 | `/startup`              | `GET`  | Returnează data pornirii serverului.                                                |
@@ -312,6 +319,9 @@ Setări importante în configurația curentă:
 - `language: "ro"` și `timeFormat: 24`.
 - `hideConfigSecrets: true`: `/config` încearcă să ascundă secretele când răspunde către RemoteApp.
 - `watchTargets`: urmărește `config/config.js` și `css/custom.css`.
+- `localMirrorUrl`: URL-ul LAN de fallback.
+- `publicMirrorUrl`: URL-ul HTTPS public, citit din `MM_PUBLIC_MIRROR_URL`, folosit pentru acces de pe telefon și redirectul Spotify.
+- `remoteAppBaseUrl`: URL-ul ales automat pentru QR code - preferă `publicMirrorUrl`, apoi cade pe `localMirrorUrl`.
 
 RemoteApp modifică programatic doar anumite zone din `config/config.js`:
 
@@ -320,6 +330,7 @@ RemoteApp modifică programatic doar anumite zone din `config/config.js`:
 - lista de feed-uri RSS;
 - mesajele și intervalul pentru `compliments`;
 - setările pentru `MMM-AIVoiceAssistant`;
+- setările pentru `MMM-SpotifyPlayer`;
 - limba și formatul orei.
 
 ## Variabile de mediu
@@ -330,6 +341,15 @@ Secrete și AI:
 | ------------------------------- | -------------------------------------------------------------------- |
 | `SECRET_OPENAI_API_KEY`         | Cheia OpenAI recomandată pentru `MMM-AIVoiceAssistant`.              |
 | `GOOGLE_CALENDAR_REFRESH_TOKEN` | Token Google, dacă integrarea calendaristică ajunge să fie folosită. |
+
+Spotify:
+
+| Variabilă                  | Rol                                                     |
+| -------------------------- | ------------------------------------------------------- |
+| `MM_PUBLIC_MIRROR_URL`     | URL public HTTPS folosit pentru redirectul Spotify.     |
+| `MM_SPOTIFY_CLIENT_ID`     | Fallback pentru Client ID dacă nu este setat în config. |
+| `MM_SPOTIFY_REDIRECT_URI`  | Fallback pentru redirect URI OAuth Spotify.             |
+| `MM_SPOTIFY_DEVICE_NAME`   | Fallback pentru numele device-ului Spotify.             |
 
 Gesture/cameră:
 
@@ -401,12 +421,14 @@ curl -X POST http://localhost:8080/remote/key \
 │   ├── news.html
 │   ├── calendar.html
 │   ├── assistant.html
+│   ├── spotify.html
 │   ├── network.html
 │   ├── settings.html
 │   ├── css/style.css
 │   └── js/script.js
 ├── modules/
-│   └── MMM-AIVoiceAssistant/
+│   ├── MMM-AIVoiceAssistant/
+│   └── MMM-SpotifyPlayer/
 ├── defaultmodules/
 ├── js/
 │   ├── app.js

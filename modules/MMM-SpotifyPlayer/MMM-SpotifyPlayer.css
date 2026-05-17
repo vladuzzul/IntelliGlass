@@ -1,0 +1,78 @@
+.mmm-spotify-player {
+  position: relative;
+  min-width: 290px;
+}
+
+.mmm-spotify-player-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mmm-spotify-player-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.mmm-spotify-player.is-armed .mmm-spotify-player-indicator {
+  opacity: 1;
+  transform: scale(1);
+  background: #22c55e;
+  box-shadow: 0 0 10px rgb(34 197 94 / 75%);
+}
+
+.mmm-spotify-player-artwork {
+  display: flex;
+  width: 64px;
+  height: 64px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 8%);
+  flex-shrink: 0;
+}
+
+.mmm-spotify-player-artwork img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mmm-spotify-player-artwork img.is-empty {
+  display: none;
+}
+
+.mmm-spotify-player-meta {
+  min-width: 0;
+  text-align: left;
+}
+
+.mmm-spotify-player-title,
+.mmm-spotify-player-artist,
+.mmm-spotify-player-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mmm-spotify-player-title {
+  max-width: 300px;
+}
+
+.mmm-spotify-player-artist {
+  max-width: 280px;
+}
+
+.mmm-spotify-player-status {
+  margin-top: 3px;
+}

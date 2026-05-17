@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src ws: wss: http: https:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+    />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta http-equiv="X-Frame-Options" content="DENY" />
+    <meta http-equiv="Referrer-Policy" content="no-referrer" />
+    <title>IntelliGlass — Spotify</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <nav class="topbar">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <button class="hamburger" id="hamburger-btn" aria-label="Menu" onclick="toggleSidebar()"><span></span><span></span><span></span></button>
+        <div class="logo">
+          <div class="logo-icon">⿻</div>
+          <span>IntelliGlass</span>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="status-dot" id="conn-dot" style="background:#f87171;"></div>
+        <span class="status-label" id="conn-label">Disconnected</span>
+      </div>
+    </nav>
+
+    <div class="layout">
+      <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+      <aside class="sidebar" id="main-sidebar">
+        <div class="sidebar-section-label">Mirror</div>
+        <a class="sidebar-item" href="index.html"> <span class="si-icon">⬡</span> <span>Overview</span> </a>
+
+        <div class="sidebar-section-label">Personalization</div>
+        <a class="sidebar-item" href="weather.html"> <span class="si-icon">☁</span> <span>Weather</span> </a>
+        <a class="sidebar-item" href="news.html"> <span class="si-icon">◉</span> <span>News</span> </a>
+        <a class="sidebar-item" href="calendar.html"> <span class="si-icon">◫</span> <span>Calendar</span> </a>
+        <a class="sidebar-item" href="assistant.html"> <span class="si-icon">✦</span> <span>AI Assistant</span> </a>
+        <a class="sidebar-item active" href="spotify.html"> <span class="si-icon">♪</span> <span>Spotify</span> </a>
+
+        <div class="sidebar-section-label">System</div>
+        <a class="sidebar-item" href="network.html"> <span class="si-icon">⊛</span> <span>Network / Wi-Fi</span> </a>
+        <a class="sidebar-item" href="settings.html"> <span class="si-icon">⚙</span> <span>Settings</span> </a>
+
+        <div style="margin-top: auto; padding: 16px 8px 8px;">
+          <div style="font-size: 11px; color: var(--text-dim); line-height: 1.7;">
+            <span style="color:var(--linen); font-weight:600;">IntelliGlass</span><br />
+            <span id="sidebar-ip" style="color:rgba(141,134,201,0.4);">—</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div id="sec-spotify" class="section visible">
+          <div class="page-header">
+            <div class="page-title">Spotify</div>
+            <div class="page-sub">Connect your account and tune how Spotify appears on the mirror.</div>
+          </div>
+          <div class="accent-bar"></div>
+
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title">🎵 Account & Login</div>
+              <div class="spotify-account">
+                <div class="spotify-account__avatar">
+                  <img id="spotify-account-avatar" class="is-empty" alt="Spotify account" />
+                  <span class="spotify-account__placeholder" id="spotify-account-placeholder">SP</span>
+                </div>
+                <div class="spotify-account__meta">
+                  <div class="spotify-account__name" id="spotify-account-name">Not connected</div>
+                  <div class="spotify-account__status small dimmed" id="spotify-account-status">Connect Spotify to link your account</div>
+                </div>
+              </div>
+              <div class="form-row">
+                <label>Spotify Client ID</label>
+                <input type="text" id="spotify-client-id" placeholder="Spotify app client ID" />
+              </div>
+              <div class="form-row">
+                <label>Redirect URI</label>
+                <input type="text" id="spotify-redirect-uri" placeholder="http://mirror-ip:8080/RemoteApp/settings.html" />
+              </div>
+              <div class="btn-row">
+                <button class="btn btn-primary" id="spotify-connect-btn" onclick="toggleSpotifyConnection()">Connect Spotify</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">🪞 Mirror Display</div>
+              <div class="form-row-2">
+                <div>
+                  <label>Device name</label>
+                  <input type="text" id="spotify-device-name" placeholder="IntelliGlass Mirror" />
+                </div>
+                <div>
+                  <label>Poll interval (ms)</label>
+                  <input type="number" id="spotify-poll-interval-ms" min="1000" max="300000" />
+                </div>
+              </div>
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-info">Show album art</div>
+                  <div class="toggle-sub">Display artwork beside the current track.</div>
+                </div>
+                <label><input id="spotify-show-album-art" type="checkbox" checked /></label>
+              </div>
+              <div class="toggle-row">
+                <div>
+                  <div class="toggle-info">Play preview audio</div>
+                  <div class="toggle-sub">Use the 30-second preview URL when Spotify provides one.</div>
+                </div>
+                <label><input id="spotify-play-preview-audio" type="checkbox" /></label>
+              </div>
+              <div class="btn-row">
+                <button class="btn btn-primary" onclick="applySpotify()">Save Spotify Settings</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div class="toast" id="toast">
+      <span id="toast-icon" style="font-size:16px;">✓</span>
+      <span id="toast-msg">Change applied!</span>
+    </div>
+
+    <script src="js/script.js"></script>
+  </body>
+</html>

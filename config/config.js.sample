@@ -25,6 +25,12 @@ function getLocalIPv4() {
 }
 
 const localMirrorIp = getLocalIPv4();
+const localMirrorUrl = `http://${localMirrorIp}:8080`;
+const publicMirrorUrl = String(process.env.MM_PUBLIC_MIRROR_URL || "").trim().replace(/\/+$/u, "");
+const remoteAppBaseUrl = publicMirrorUrl || localMirrorUrl;
+const spotifyRedirectUri = publicMirrorUrl
+	? `${publicMirrorUrl}/RemoteApp/settings.html`
+	: "http://127.0.0.1:8080/RemoteApp/settings.html";
 
 let config = {
 	address: "0.0.0.0",	// Address to listen on, can be:
@@ -167,11 +173,13 @@ let config = {
 	"module": "MMM-AIVoiceAssistant",
 	"position": "top_bar",
 	"config": {
-		"activationKey": "ArrowDown",
+		"activationKey": "ArrowUp",
+		"secondaryActivationKey": "ArrowDown",
 		"activationKeyStates": [
 			"KEY_PRESSED",
 			"KEY_LONGPRESSED"
 		],
+		"carouselSlideIndex": 2,
 		"recognitionLanguage": "en-US",
 		"sttEngine": "openai",
 		"sttFallbackToOpenAI": true,
@@ -207,11 +215,31 @@ let config = {
 	}
 },
 		{
+			module: "MMM-SpotifyPlayer",
+			position: "top_center",
+			header: "Spotify",
+			config: {
+				clientId: "",
+				redirectUri: spotifyRedirectUri,
+				deviceName: "IntelliGlass Mirror",
+				nowPlayingEndpoint: "remote/spotify/now-playing",
+				controlEndpoint: "remote/spotify/control",
+				pollIntervalMs: 7000,
+				showAlbumArt: true,
+				playPreviewAudio: false,
+				controlSlideIndex: 0,
+				activationKey: "ArrowUp",
+				secondaryActivationKey: "ArrowDown",
+				controlWindowMs: 5000,
+				gestureControlsEnabled: true
+			}
+		},
+		{
 			module: "MMM-QRCode",
 			position: "top_bar",
 			header: "QR Code to configurator",
 			config: {
-				text: `http://${localMirrorIp}:8080/RemoteApp/index.html`,
+				text: `${remoteAppBaseUrl}/RemoteApp/index.html`,
 				showRaw: false,        // true = to show the text, false = to hide the text.
 				imageSize: 700,       // size is in px (both the height and with are equal).
 				colorDark: "#fff",    // set qrcode px color.
@@ -223,12 +251,12 @@ let config = {
 		position: 'bottom_bar', 
 		config: {
 			transitionInterval: 50000,
-			//ignoreModules: ['compliments'],
+			ignoreModules: [],
 			mode: 'slides',
 			showPageIndicators: true,
 			showPageControls: true,
 			slides: {
-				main: ['clock', 'weather','compliments', 'calendar'],
+				main: ['clock', 'weather','compliments', 'calendar', 'MMM-SpotifyPlayer'],
 				"Slide 2": ['newsfeed'],
 				"Slide 3": ['MMM-AIVoiceAssistant'],
 				"Slide 4": ['MMM-QRCode'],

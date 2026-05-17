@@ -15,6 +15,12 @@ const vendor = require("./vendor");
 
 const { getHtml, getVersion, getEnvVars, cors, getConfigFilePath } = require("#server_functions");
 
+const spotifyAuthState = {
+	accessToken: "",
+	expiresAt: null,
+	updatedAt: null
+};
+
 /**
  *
  * @param basePath
@@ -506,6 +512,12 @@ function normalizeAssistantPayload (rawAssistant) {
 	};
 
 	assignString(fields, "activationKey", rawAssistant.activationKey, 1, 40);
+	if (typeof rawAssistant.secondaryActivationKey === "string") {
+		const secondaryActivationKey = rawAssistant.secondaryActivationKey.trim();
+		if (secondaryActivationKey.length <= 40) {
+			fields.secondaryActivationKey = secondaryActivationKey;
+		}
+	}
 	if (Array.isArray(rawAssistant.activationKeyStates)) {
 		const allowedStates = new Set(["KEY_PRESSED", "KEY_LONGPRESSED", "KEY_UP", "KEY_DOWN", "KEY_HOLD"]);
 		const states = rawAssistant.activationKeyStates
@@ -632,6 +644,55 @@ function normalizeAssistantPayload (rawAssistant) {
 
 /**
  *
+ * @param rawSpotify
+ */
+function normalizeSpotifyPayload (rawSpotify) {
+	if (!isPlainObject(rawSpotify)) return null;
+
+	const fields = {};
+	const assignString = (key, value, minLen, maxLen, regex = null) => {
+		if (typeof value !== "string") return;
+		const trimmed = value.trim();
+		if (trimmed.length < minLen || trimmed.length > maxLen) return;
+		if (regex && trimmed && !regex.test(trimmed)) return;
+		fields[key] = trimmed;
+	};
+	const assignNumber = (key, value, min, max) => {
+		if (typeof value === "undefined" || value === null || value === "") return;
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed) || parsed < min || parsed > max) return;
+		fields[key] = Math.round(parsed);
+	};
+
+	assignString("clientId", rawSpotify.clientId, 0, 200);
+	assignString("redirectUri", rawSpotify.redirectUri, 0, 300, /^https?:\/\//i);
+	assignString("deviceName", rawSpotify.deviceName, 0, 120);
+	assignString("nowPlayingEndpoint", rawSpotify.nowPlayingEndpoint, 1, 300);
+	assignString("activationKey", rawSpotify.activationKey, 1, 40);
+	if (typeof rawSpotify.secondaryActivationKey === "string") {
+		const secondaryActivationKey = rawSpotify.secondaryActivationKey.trim();
+		if (secondaryActivationKey.length <= 40) {
+			fields.secondaryActivationKey = secondaryActivationKey;
+		}
+	}
+	assignNumber("pollIntervalMs", rawSpotify.pollIntervalMs, 1000, 300000);
+
+	if (typeof rawSpotify.showAlbumArt === "boolean") {
+		fields.showAlbumArt = rawSpotify.showAlbumArt;
+	}
+	if (typeof rawSpotify.playPreviewAudio === "boolean") {
+		fields.playPreviewAudio = rawSpotify.playPreviewAudio;
+	}
+
+	if (Object.keys(fields).length === 0) {
+		return null;
+	}
+
+	return { fields };
+}
+
+/**
+ *
  * @param block
  */
 function parseModuleBlockObject (block) {
@@ -705,6 +766,126 @@ function replaceAIAssistantBlock (block, assistantUpdate) {
 	}
 
 	return JSON.stringify(moduleObject, null, "\t");
+}
+
+/**
+ *
+ * @param block
+ * @param spotifyUpdate
+ */
+function replaceSpotifyBlock (block, spotifyUpdate) {
+	if (!spotifyUpdate || !isPlainObject(spotifyUpdate)) return block;
+	const moduleObject = parseModuleBlockObject(block);
+	if (!moduleObject || moduleObject.module !== "MMM-SpotifyPlayer") {
+		return block;
+	}
+
+	const before = JSON.stringify(moduleObject);
+	if (!isPlainObject(moduleObject.config)) {
+		moduleObject.config = {};
+	}
+
+	Object.assign(moduleObject.config, spotifyUpdate.fields || {});
+
+	const after = JSON.stringify(moduleObject);
+	if (after === before) {
+		return block;
+	}
+
+	return JSON.stringify(moduleObject, null, "\t");
+}
+
+/**
+ *
+ * @param rawAuth
+ */
+function normalizeSpotifyAuthPayload (rawAuth) {
+	if (!isPlainObject(rawAuth)) return null;
+	const accessToken = typeof rawAuth.accessToken === "string"
+		? rawAuth.accessToken.trim()
+		: "";
+	if (accessToken.length < 10 || accessToken.length > 4096) {
+		return null;
+	}
+
+	let expiresAt = null;
+	if (typeof rawAuth.expiresAt !== "undefined" && rawAuth.expiresAt !== null && rawAuth.expiresAt !== "") {
+		const parsed = Number(rawAuth.expiresAt);
+		if (!Number.isFinite(parsed) || parsed <= Date.now()) {
+			return null;
+		}
+		expiresAt = Math.round(parsed);
+	}
+
+	return { accessToken, expiresAt };
+}
+
+/**
+ *
+ */
+function hasValidSpotifyAuth () {
+	if (!spotifyAuthState.accessToken) {
+		return false;
+	}
+	if (spotifyAuthState.expiresAt && Date.now() > spotifyAuthState.expiresAt) {
+		return false;
+	}
+	return true;
+}
+
+/**
+ *
+ */
+function clearSpotifyAuthState () {
+	spotifyAuthState.accessToken = "";
+	spotifyAuthState.expiresAt = null;
+	spotifyAuthState.updatedAt = null;
+}
+
+/**
+ *
+ */
+async function fetchSpotifyNowPlaying () {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 5000);
+	try {
+		return await fetch("https://api.spotify.com/v1/me/player/currently-playing?additional_types=track", {
+			headers: { Authorization: `Bearer ${spotifyAuthState.accessToken}` },
+			signal: controller.signal
+		});
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+const SPOTIFY_PLAYBACK_ACTIONS = {
+	next: { method: "POST", path: "next" },
+	previous: { method: "POST", path: "previous" },
+	play: { method: "PUT", path: "play" },
+	pause: { method: "PUT", path: "pause" }
+};
+
+/**
+ *
+ * @param action
+ */
+async function fetchSpotifyPlaybackControl (action) {
+	const control = SPOTIFY_PLAYBACK_ACTIONS[action];
+	if (!control) {
+		return null;
+	}
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 5000);
+	try {
+		return await fetch(`https://api.spotify.com/v1/me/player/${control.path}`, {
+			method: control.method,
+			headers: { Authorization: `Bearer ${spotifyAuthState.accessToken}` },
+			signal: controller.signal
+		});
+	} finally {
+		clearTimeout(timeout);
+	}
 }
 
 const REMOTE_SOURCE_CHECK_TIMEOUT_MS = 5000;
@@ -1095,6 +1276,99 @@ function Server (configObj) {
 				res.status(200).json({ ok: true, clients, delivered: clients > 0 });
 			});
 
+			app.get(withBasePath("remote/spotify/status"), (req, res) => {
+				res.status(200).json({
+					ok: true,
+					connected: hasValidSpotifyAuth(),
+					expiresAt: spotifyAuthState.expiresAt,
+					updatedAt: spotifyAuthState.updatedAt
+				});
+			});
+
+			app.post(withBasePath("remote/spotify/auth"), (req, res) => {
+				const auth = normalizeSpotifyAuthPayload(req && req.body ? req.body : null);
+				if (!auth) {
+					res.status(400).json({ ok: false, error: "Invalid Spotify auth payload" });
+					return;
+				}
+
+				spotifyAuthState.accessToken = auth.accessToken;
+				spotifyAuthState.expiresAt = auth.expiresAt;
+				spotifyAuthState.updatedAt = Date.now();
+				res.status(200).json({
+					ok: true,
+					connected: true,
+					expiresAt: spotifyAuthState.expiresAt
+				});
+			});
+
+			app.delete(withBasePath("remote/spotify/auth"), (req, res) => {
+				clearSpotifyAuthState();
+				res.status(200).json({ ok: true, connected: false });
+			});
+
+			app.get(withBasePath("remote/spotify/now-playing"), async (req, res) => {
+				if (!hasValidSpotifyAuth()) {
+					clearSpotifyAuthState();
+					res.status(401).json({ ok: false, error: "Spotify not connected" });
+					return;
+				}
+
+				try {
+					const response = await fetchSpotifyNowPlaying();
+					if (response.status === 204) {
+						res.status(204).send();
+						return;
+					}
+					if (response.status === 401) {
+						clearSpotifyAuthState();
+						res.status(401).json({ ok: false, error: "Spotify authorization expired" });
+						return;
+					}
+					if (!response.ok) {
+						res.status(response.status).json({ ok: false, error: "Spotify request failed" });
+						return;
+					}
+					res.status(200).json(await response.json());
+				} catch (error) {
+					const status = error && error.name === "AbortError" ? 504 : 502;
+					res.status(status).json({ ok: false, error: "Spotify unavailable" });
+				}
+			});
+
+			app.post(withBasePath("remote/spotify/control"), async (req, res) => {
+				if (!hasValidSpotifyAuth()) {
+					clearSpotifyAuthState();
+					res.status(401).json({ ok: false, error: "Spotify not connected" });
+					return;
+				}
+
+				const action = req && req.body && typeof req.body.action === "string"
+					? req.body.action.trim()
+					: "";
+				if (!Object.prototype.hasOwnProperty.call(SPOTIFY_PLAYBACK_ACTIONS, action)) {
+					res.status(400).json({ ok: false, error: "Unsupported Spotify action" });
+					return;
+				}
+
+				try {
+					const response = await fetchSpotifyPlaybackControl(action);
+					if (response.status === 401) {
+						clearSpotifyAuthState();
+						res.status(401).json({ ok: false, error: "Spotify authorization expired" });
+						return;
+					}
+					if (!response.ok) {
+						res.status(response.status).json({ ok: false, error: "Spotify control failed" });
+						return;
+					}
+					res.status(200).json({ ok: true, action });
+				} catch (error) {
+					const status = error && error.name === "AbortError" ? 504 : 502;
+					res.status(status).json({ ok: false, error: "Spotify unavailable" });
+				}
+			});
+
 			app.post(withBasePath("remote/config"), (req, res) => {
 				const payload = req && req.body ? req.body : {};
 				const updates = {};
@@ -1154,6 +1428,10 @@ function Server (configObj) {
 				if (assistantUpdate) {
 					updates.assistant = assistantUpdate;
 				}
+				const spotifyUpdate = normalizeSpotifyPayload(payload.spotify);
+				if (spotifyUpdate) {
+					updates.spotify = spotifyUpdate;
+				}
 				if (Object.keys(updates).length === 0) {
 					res.status(400).json({ ok: false, error: "No valid updates" });
 					return;
@@ -1172,6 +1450,7 @@ function Server (configObj) {
 					let newsfeedCount = 0;
 					let complimentsCount = 0;
 					let assistantCount = 0;
+					let spotifyCount = 0;
 					let localeChanged = false;
 
 					if (updates.locale && updates.locale.language) {
@@ -1227,6 +1506,11 @@ function Server (configObj) {
 							updatedBlock = replaceAIAssistantBlock(updatedBlock, updates.assistant);
 							if (updatedBlock !== block) assistantCount += 1;
 						}
+
+						if (moduleName === "MMM-SpotifyPlayer" && updates.spotify) {
+							updatedBlock = replaceSpotifyBlock(updatedBlock, updates.spotify);
+							if (updatedBlock !== block) spotifyCount += 1;
+						}
 						if (updatedBlock !== block) {
 							newConfig = newConfig.slice(0, range.start) + updatedBlock + newConfig.slice(range.end);
 							changed = true;
@@ -1236,7 +1520,7 @@ function Server (configObj) {
 						const clients = getSocketClientCount(io);
 						res.status(200).json({
 							ok: true,
-							updated: { weather: 0, calendar: 0, newsfeed: 0, compliments: 0, assistant: 0, locale: false },
+							updated: { weather: 0, calendar: 0, newsfeed: 0, compliments: 0, assistant: 0, spotify: 0, locale: false },
 							reloaded: false,
 							clients
 						});
@@ -1254,7 +1538,7 @@ function Server (configObj) {
 						io.emit("RELOAD");
 						res.status(200).json({
 							ok: true,
-							updated: { weather: weatherCount, calendar: calendarCount, newsfeed: newsfeedCount, compliments: complimentsCount, assistant: assistantCount, locale: localeChanged },
+							updated: { weather: weatherCount, calendar: calendarCount, newsfeed: newsfeedCount, compliments: complimentsCount, assistant: assistantCount, spotify: spotifyCount, locale: localeChanged },
 							reloaded: clients > 0,
 							clients
 						});

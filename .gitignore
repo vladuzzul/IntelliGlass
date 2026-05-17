@@ -61,6 +61,10 @@ Temporary Items
 !modules/MMM-AIVoiceAssistant/
 !modules/MMM-AIVoiceAssistant/**
 
+# Keep MMM-SpotifyPlayer module tracked
+!modules/MMM-SpotifyPlayer/
+!modules/MMM-SpotifyPlayer/**
+
 # Ignore users config file but keep the samples.
 config
 !config/config.js.sample

@@ -214,9 +214,13 @@ const state = {
 const CONNECTION_STORAGE_KEY = "intelliglass-remote-connection";
 const LOCAL_UI_STORAGE_KEY = "intelliglass-remote-ui";
 const SPOTIFY_AUTH_KEY = "intelliglass-spotify-auth";
+const SPOTIFY_PKCE_VERIFIER_KEY = "intelliglass-spotify-pkce-verifier";
+const SPOTIFY_AUTH_STATE_KEY = "intelliglass-spotify-auth-state";
+const SPOTIFY_RETURN_PATH_KEY = "intelliglass-spotify-return-path";
 const SPOTIFY_SCOPES = "user-read-currently-playing user-read-playback-state user-modify-playback-state streaming";
 let sourceHealthRequestId = 0;
 let spotifyEnvSettings = null;
+let spotifyEnvironmentFallback = { clientId: "", redirectUri: "", deviceName: "" };
 let spotifyProfile = null;
 
 /**
@@ -306,7 +310,8 @@ function readSpotifyAuth () {
 		if (!parsed || typeof parsed.accessToken !== "string") return null;
 		return {
 			accessToken: parsed.accessToken,
-			expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : null
+			expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : null,
+			refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : ""
 		};
 	} catch (e) {
 		return null;
@@ -319,14 +324,28 @@ function readSpotifyAuth () {
 async function fetchSpotifyEnvSettings () {
 	try {
 		const basePath = getBasePathFromLocation();
-		const res = await fetch(`${window.location.origin}${basePath}env`, { cache: "no-store" });
-		if (!res.ok) return null;
-		const data = await res.json();
-		if (!data || typeof data !== "object") return null;
+		const [envResponse, configResponse] = await Promise.all([
+			fetch(`${window.location.origin}${basePath}env`, { cache: "no-store" }),
+			fetch(`${window.location.origin}${basePath}config`, { cache: "no-store" })
+		]);
+		const envData = envResponse.ok ? await envResponse.json() : {};
+		const configData = configResponse.ok ? await configResponse.json() : null;
+		const spotifyConfig = getSpotifyModuleConfig(configData) || {};
+		spotifyEnvironmentFallback = {
+			clientId: typeof envData.spotifyClientId === "string" ? envData.spotifyClientId : "",
+			redirectUri: typeof envData.spotifyRedirectUri === "string" ? envData.spotifyRedirectUri : "",
+			deviceName: typeof envData.spotifyDeviceName === "string" ? envData.spotifyDeviceName : ""
+		};
 		return {
-			clientId: typeof data.spotifyClientId === "string" ? data.spotifyClientId : "",
-			redirectUri: typeof data.spotifyRedirectUri === "string" ? data.spotifyRedirectUri : "",
-			deviceName: typeof data.spotifyDeviceName === "string" ? data.spotifyDeviceName : ""
+			clientId: typeof spotifyConfig.clientId === "string" && spotifyConfig.clientId
+				? spotifyConfig.clientId
+				: spotifyEnvironmentFallback.clientId,
+			redirectUri: typeof spotifyConfig.redirectUri === "string" && spotifyConfig.redirectUri
+				? spotifyConfig.redirectUri
+				: spotifyEnvironmentFallback.redirectUri,
+			deviceName: typeof spotifyConfig.deviceName === "string" && spotifyConfig.deviceName
+				? spotifyConfig.deviceName
+				: spotifyEnvironmentFallback.deviceName
 		};
 	} catch (e) {
 		return null;
@@ -448,6 +467,7 @@ async function loadSpotifySettings () {
 	if (isSpotifyAuthValid(auth)) {
 		const profile = await fetchSpotifyProfile(auth);
 		if (profile) updateSpotifyUi(profile);
+		void syncSpotifyAuthToMirror(auth);
 	}
 }
 
@@ -475,14 +495,28 @@ async function connectSpotify () {
 		? spotifyEnvSettings.redirectUri
 		: getDefaultSpotifyRedirectUri();
 	if (!clientId) {
-		showToast("Spotify Client ID missing in config.env", true);
+		showToast("Spotify Client ID missing in config.js or environment", true);
+		return;
+	}
+	const verifier = generateSpotifyRandomString(64);
+	const challenge = await generateSpotifyCodeChallenge(verifier);
+	const stateValue = generateSpotifyRandomString(24);
+	try {
+		sessionStorage.setItem(SPOTIFY_PKCE_VERIFIER_KEY, verifier);
+		sessionStorage.setItem(SPOTIFY_AUTH_STATE_KEY, stateValue);
+		sessionStorage.setItem(SPOTIFY_RETURN_PATH_KEY, window.location.pathname);
+	} catch (e) {
+		showToast("Unable to prepare Spotify login", true);
 		return;
 	}
 	const authUrl = new URL("https://accounts.spotify.com/authorize");
 	authUrl.searchParams.set("client_id", clientId);
-	authUrl.searchParams.set("response_type", "token");
+	authUrl.searchParams.set("response_type", "code");
 	authUrl.searchParams.set("redirect_uri", redirectUri);
 	authUrl.searchParams.set("scope", SPOTIFY_SCOPES);
+	authUrl.searchParams.set("code_challenge_method", "S256");
+	authUrl.searchParams.set("code_challenge", challenge);
+	authUrl.searchParams.set("state", stateValue);
 	authUrl.searchParams.set("show_dialog", "true");
 	window.location.href = authUrl.toString();
 }
@@ -493,37 +527,215 @@ async function connectSpotify () {
 function disconnectSpotify () {
 	try {
 		sessionStorage.removeItem(SPOTIFY_AUTH_KEY);
+		sessionStorage.removeItem(SPOTIFY_PKCE_VERIFIER_KEY);
+		sessionStorage.removeItem(SPOTIFY_AUTH_STATE_KEY);
 	} catch (e) {
 		return null;
 	}
 	spotifyProfile = null;
 	updateSpotifyUi();
+	void clearSpotifyAuthOnMirror();
 	showToast("Spotify disconnected");
 }
 
 /**
  *
  */
-function handleSpotifyAuthCallback () {
-	if (!window.location.hash || window.location.hash.indexOf("access_token") === -1) return;
-	const params = new URLSearchParams(window.location.hash.substring(1));
-	const accessToken = params.get("access_token");
-	if (!accessToken) return;
-	const expiresIn = Number(params.get("expires_in"));
-	const expiresAt = Number.isFinite(expiresIn) ? Date.now() + expiresIn * 1000 : null;
+async function handleSpotifyAuthCallback () {
+	const params = new URLSearchParams(window.location.search);
+	const code = params.get("code");
+	const returnedState = params.get("state");
+	const error = params.get("error");
+	if (error) {
+		showToast(`Spotify login failed: ${error}`, true);
+		return;
+	}
+	if (!code) return;
+
+	const loginSession = readSpotifyLoginSession();
+	if (!loginSession) {
+		showToast("Spotify login session missing", true);
+		return;
+	}
+
+	if (!loginSession.verifier || !loginSession.expectedState || returnedState !== loginSession.expectedState) {
+		showToast("Spotify login state mismatch", true);
+		return;
+	}
+
+	if (!spotifyEnvSettings) {
+		spotifyEnvSettings = await fetchSpotifyEnvSettings();
+	}
+	if (!spotifyEnvSettings) {
+		spotifyEnvSettings = { clientId: "", redirectUri: "", deviceName: "" };
+	}
+
+	const token = await exchangeSpotifyAuthorizationCode(code, loginSession.verifier);
+	if (!token) {
+		return;
+	}
+
+	const expiresAt = Number.isFinite(token.expiresIn)
+		? Date.now() + token.expiresIn * 1000
+		: null;
+	const auth = {
+		accessToken: token.accessToken,
+		expiresAt,
+		refreshToken: token.refreshToken || ""
+	};
+
 	try {
-		sessionStorage.setItem(SPOTIFY_AUTH_KEY, JSON.stringify({ accessToken, expiresAt }));
+		sessionStorage.setItem(SPOTIFY_AUTH_KEY, JSON.stringify(auth));
+		sessionStorage.removeItem(SPOTIFY_PKCE_VERIFIER_KEY);
+		sessionStorage.removeItem(SPOTIFY_AUTH_STATE_KEY);
 	} catch (e) {
 		showToast("Unable to store Spotify token", true);
 		return;
 	}
+
 	updateSpotifyUi();
-	fetchSpotifyProfile({ accessToken, expiresAt }).then(function (profile) {
+	fetchSpotifyProfile(auth).then(function (profile) {
 		if (profile) updateSpotifyUi(profile);
 	});
+	void syncSpotifyAuthToMirror(auth);
 	showToast("Spotify connected");
+	let returnPath;
+	try {
+		returnPath = sessionStorage.getItem(SPOTIFY_RETURN_PATH_KEY) || "";
+		sessionStorage.removeItem(SPOTIFY_RETURN_PATH_KEY);
+	} catch (e) {
+		returnPath = "";
+	}
 	if (history && typeof history.replaceState === "function") {
-		history.replaceState(null, "", window.location.pathname + window.location.search);
+		history.replaceState(null, "", window.location.pathname);
+	}
+	if (returnPath && returnPath !== window.location.pathname) {
+		window.location.assign(returnPath);
+	}
+}
+
+/**
+ *
+ */
+function readSpotifyLoginSession () {
+	try {
+		return {
+			verifier: sessionStorage.getItem(SPOTIFY_PKCE_VERIFIER_KEY) || "",
+			expectedState: sessionStorage.getItem(SPOTIFY_AUTH_STATE_KEY) || ""
+		};
+	} catch (e) {
+		return null;
+	}
+}
+
+/**
+ *
+ * @param length
+ */
+function generateSpotifyRandomString (length) {
+	const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+	const randomValues = new Uint8Array(length);
+	window.crypto.getRandomValues(randomValues);
+	return Array.from(randomValues, (value) => possible[value % possible.length]).join("");
+}
+
+/**
+ *
+ * @param verifier
+ */
+async function generateSpotifyCodeChallenge (verifier) {
+	const data = new TextEncoder().encode(verifier);
+	const digest = await window.crypto.subtle.digest("SHA-256", data);
+	return btoa(String.fromCharCode(...new Uint8Array(digest)))
+		.replace(/\+/gu, "-")
+		.replace(/\//gu, "_")
+		.replace(/=+$/gu, "");
+}
+
+/**
+ *
+ * @param code
+ * @param verifier
+ */
+async function exchangeSpotifyAuthorizationCode (code, verifier) {
+	const clientId = spotifyEnvSettings && spotifyEnvSettings.clientId ? spotifyEnvSettings.clientId : "";
+	const redirectUri = spotifyEnvSettings && spotifyEnvSettings.redirectUri
+		? spotifyEnvSettings.redirectUri
+		: getDefaultSpotifyRedirectUri();
+	if (!clientId || !redirectUri) {
+		showToast("Spotify configuration missing", true);
+		return null;
+	}
+
+	try {
+		const body = new URLSearchParams({
+			client_id: clientId,
+			grant_type: "authorization_code",
+			code,
+			redirect_uri: redirectUri,
+			code_verifier: verifier
+		});
+		const res = await fetch("https://accounts.spotify.com/api/token", {
+			method: "POST",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body
+		});
+		if (!res.ok) {
+			showToast(`Spotify token exchange failed (${res.status})`, true);
+			return null;
+		}
+		const data = await res.json();
+		if (!data || typeof data.access_token !== "string") {
+			showToast("Spotify token response invalid", true);
+			return null;
+		}
+		return {
+			accessToken: data.access_token,
+			refreshToken: typeof data.refresh_token === "string" ? data.refresh_token : "",
+			expiresIn: Number(data.expires_in)
+		};
+	} catch (e) {
+		showToast("Spotify token exchange failed", true);
+		return null;
+	}
+}
+
+/**
+ *
+ * @param auth
+ */
+async function syncSpotifyAuthToMirror (auth = readSpotifyAuth()) {
+	if (!state.connected || !state.apiBase || !isSpotifyAuthValid(auth)) {
+		return false;
+	}
+
+	try {
+		const res = await fetch(`${state.apiBase}remote/spotify/auth`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(auth)
+		});
+		return res.ok;
+	} catch (e) {
+		return false;
+	}
+}
+
+/**
+ *
+ */
+async function clearSpotifyAuthOnMirror () {
+	if (!state.connected || !state.apiBase) {
+		return false;
+	}
+
+	try {
+		const res = await fetch(`${state.apiBase}remote/spotify/auth`, {
+			method: "DELETE"
+		});
+		return res.ok;
+	} catch (e) {
+		return false;
 	}
 }
 
@@ -609,6 +821,7 @@ function connectWS (options = {}) {
 		fetchConfigSnapshot().then(function (cfg) {
 			applyConfigToUI(cfg);
 		});
+		void syncSpotifyAuthToMirror();
 		if (state.statusTimer) clearInterval(state.statusTimer);
 		state.statusTimer = setInterval(function () {
 			fetchStatus().catch(function () { return null; });
@@ -879,6 +1092,19 @@ function getCalendarUrls (config) {
 function getAIAssistantModuleConfig (config) {
 	if (!config || !Array.isArray(config.modules)) return null;
 	const moduleConfig = config.modules.find((mod) => mod && mod.module === "MMM-AIVoiceAssistant");
+	if (!moduleConfig || !moduleConfig.config || typeof moduleConfig.config !== "object") {
+		return null;
+	}
+	return moduleConfig.config;
+}
+
+/**
+ *
+ * @param config
+ */
+function getSpotifyModuleConfig (config) {
+	if (!config || !Array.isArray(config.modules)) return null;
+	const moduleConfig = config.modules.find((mod) => mod && mod.module === "MMM-SpotifyPlayer");
 	if (!moduleConfig || !moduleConfig.config || typeof moduleConfig.config !== "object") {
 		return null;
 	}
@@ -1176,7 +1402,6 @@ function applyConfigToUI (config) {
 			el.checked = Boolean(value);
 		};
 
-		setValue("assistant-activation-key", assistantConfig.activationKey || "ArrowUp");
 		if (Array.isArray(assistantConfig.activationKeyStates)) {
 			setValue("assistant-activation-states", assistantConfig.activationKeyStates.join(","));
 		}
@@ -1222,6 +1447,40 @@ function applyConfigToUI (config) {
 		setValue("assistant-stt-openai-model", sttOpenAIConfig.model || "gpt-4o-mini-transcribe");
 		setValue("assistant-stt-openai-language", sttOpenAIConfig.language || "");
 		setValue("assistant-stt-openai-prompt", sttOpenAIConfig.prompt || "");
+	}
+
+	const spotifyConfig = getSpotifyModuleConfig(config);
+	if (spotifyConfig) {
+		const setValue = (id, value) => {
+			const el = document.getElementById(id);
+			if (!el) return;
+			el.value = value == null ? "" : String(value);
+		};
+		const setChecked = (id, value) => {
+			const el = document.getElementById(id);
+			if (!el) return;
+			el.checked = Boolean(value);
+		};
+
+		setValue("spotify-client-id", spotifyConfig.clientId || "");
+		setValue("spotify-redirect-uri", spotifyConfig.redirectUri || "");
+		setValue("spotify-device-name", spotifyConfig.deviceName || "");
+		setValue("spotify-poll-interval-ms", spotifyConfig.pollIntervalMs);
+		setChecked("spotify-show-album-art", spotifyConfig.showAlbumArt !== false);
+		setChecked("spotify-play-preview-audio", spotifyConfig.playPreviewAudio === true);
+
+		spotifyEnvSettings = {
+			...(spotifyEnvSettings || {}),
+			clientId: typeof spotifyConfig.clientId === "string" && spotifyConfig.clientId
+				? spotifyConfig.clientId
+				: spotifyEnvironmentFallback.clientId,
+			redirectUri: typeof spotifyConfig.redirectUri === "string" && spotifyConfig.redirectUri
+				? spotifyConfig.redirectUri
+				: spotifyEnvironmentFallback.redirectUri,
+			deviceName: typeof spotifyConfig.deviceName === "string" && spotifyConfig.deviceName
+				? spotifyConfig.deviceName
+				: spotifyEnvironmentFallback.deviceName
+		};
 	}
 
 	const langEl = document.getElementById("set-lang");
@@ -1478,6 +1737,46 @@ async function applyLocale () {
 /**
  *
  */
+async function applySpotify () {
+	const clientId = getInputRaw("spotify-client-id");
+	const redirectUri = getInputRaw("spotify-redirect-uri");
+	const deviceName = getInputRaw("spotify-device-name");
+	const pollIntervalRaw = getInputRaw("spotify-poll-interval-ms");
+	const showAlbumArtEl = document.getElementById("spotify-show-album-art");
+	const playPreviewAudioEl = document.getElementById("spotify-play-preview-audio");
+
+	if (redirectUri && !(/^https?:\/\//i).test(redirectUri)) {
+		showToast("Spotify redirect URI must start with http:// or https://", true);
+		return;
+	}
+
+	const pollIntervalMs = pollIntervalRaw ? Number(pollIntervalRaw) : 7000;
+	if (!Number.isFinite(pollIntervalMs) || !Number.isInteger(pollIntervalMs) || pollIntervalMs < 1000 || pollIntervalMs > 300000) {
+		showToast("Spotify poll interval must be between 1000 and 300000 ms", true);
+		return;
+	}
+
+	const result = await updateConfig({
+		spotify: {
+			clientId,
+			redirectUri,
+			deviceName,
+			pollIntervalMs,
+			showAlbumArt: showAlbumArtEl ? Boolean(showAlbumArtEl.checked) : true,
+			playPreviewAudio: playPreviewAudioEl ? Boolean(playPreviewAudioEl.checked) : false
+		}
+	});
+
+	if (handleApplyResult(result)) {
+		fetchConfigSnapshot().then(function (cfg) {
+			applyConfigToUI(cfg);
+		});
+	}
+}
+
+/**
+ *
+ */
 async function applyAssistant () {
 	const getValue = (id) => {
 		const el = document.getElementById(id);
@@ -1508,8 +1807,6 @@ async function applyAssistant () {
 
 	try {
 		const assistantPayload = {};
-		const activationKey = getValue("assistant-activation-key");
-		if (activationKey) assistantPayload.activationKey = activationKey;
 
 		const activationStatesRaw = getValue("assistant-activation-states");
 		if (activationStatesRaw) {
@@ -1691,7 +1988,7 @@ function autoConnectIfPossible () {
 	connectWS({ host, port, skipThrottle: true });
 }
 
-handleSpotifyAuthCallback();
+void handleSpotifyAuthCallback();
 autoConnectIfPossible();
 applyLocalUi();
 populateCityPresetSelect();

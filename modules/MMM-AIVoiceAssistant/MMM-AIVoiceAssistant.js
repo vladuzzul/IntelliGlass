@@ -12,7 +12,9 @@ const TTS_RESULT_NOTIFICATION = "MMM_AI_ASSISTANT_TTS_RESULT";
 Module.register("MMM-AIVoiceAssistant", {
 	defaults: {
 		activationKey: "ArrowUp",
+		secondaryActivationKey: "ArrowDown",
 		activationKeyStates: ["KEY_PRESSED", "KEY_LONGPRESSED"],
+		carouselSlideIndex: null,
 		listenToMMMKeyBindings: true,
 		enableKeyboardFallback: true,
 		triggerCooldownMs: 1200,
@@ -119,6 +121,7 @@ Module.register("MMM-AIVoiceAssistant", {
 		this.autoScrollDirection = 1;
 		this.autoScrollLastTick = 0;
 		this.isSpeaking = false;
+		this.currentCarouselSlideIndex = 0;
 		this.loadAvailableVoices();
 		this.sendSocketNotification(INIT_NOTIFICATION, {
 			instanceId: this.identifier,
@@ -154,15 +157,26 @@ Module.register("MMM-AIVoiceAssistant", {
 			return;
 		}
 
+		if (notification === "CAROUSEL_CHANGED") {
+			if (payload && Number.isInteger(payload.slide)) {
+				this.currentCarouselSlideIndex = payload.slide;
+			}
+			return;
+		}
+
 		if (notification !== "KEYPRESS" || !this.config.listenToMMMKeyBindings) {
 			return;
 		}
 
-		if (!payload || payload.keyName !== this.config.activationKey) {
+		if (!payload || !this.isActivationKey(payload.keyName)) {
 			return;
 		}
 
 		if (!this.config.activationKeyStates.includes(payload.keyState)) {
+			return;
+		}
+
+		if (!this.isActiveCarouselSlide()) {
 			return;
 		}
 
@@ -237,11 +251,15 @@ Module.register("MMM-AIVoiceAssistant", {
 		}
 
 		this.keyboardHandler = (event) => {
-			if (event.key !== this.config.activationKey || event.repeat) {
+			if (!this.isActivationKey(event.key) || event.repeat) {
 				return;
 			}
 
 			if (this.isEditableTarget(event.target)) {
+				return;
+			}
+
+			if (!this.isActiveCarouselSlide()) {
 				return;
 			}
 
@@ -271,6 +289,25 @@ Module.register("MMM-AIVoiceAssistant", {
 		}
 
 		return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+	},
+
+	isActiveCarouselSlide () {
+		return !Number.isInteger(this.config.carouselSlideIndex)
+			|| this.currentCarouselSlideIndex === this.config.carouselSlideIndex;
+	},
+
+	getActivationKeys () {
+		return Array.from(new Set([
+			this.config.activationKey,
+			this.config.secondaryActivationKey
+		]
+			.filter((key) => typeof key === "string")
+			.map((key) => key.trim())
+			.filter(Boolean)));
+	},
+
+	isActivationKey (key) {
+		return this.getActivationKeys().includes(key);
 	},
 
 	resolveSttEngine () {
