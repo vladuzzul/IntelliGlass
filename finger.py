@@ -304,10 +304,10 @@ def detect_sign_and_action(lm_list, total_fingers, current_state, frame_width, f
     if total_fingers == 4:
         new_state = "Play"
         sign = "PLAY_SIGN"
+        action = "space"
     elif total_fingers == 0 and current_state == "Play":
         new_state = "Pause"
         sign = "PAUSE_SIGN"
-        action = "space"
     elif total_fingers == 1:
         if lm_list[8][1] < x_left_threshold:
             sign = "LEFT_SIGN"
