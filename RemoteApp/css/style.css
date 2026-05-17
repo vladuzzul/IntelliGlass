@@ -1,35 +1,35 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    /* Palette — Rich Black 0A0908 · Dark Sienna 49111C · Cultured F2F4F3 · Grullo A9927D · Umber 5E503F */
-    --midnight:      #0a0908;
-    --test:          #1a1411;
-    --midnight-card: #171210;
-    --midnight-deep: #100d0b;
-    --slate-blue:    #a9927d;
-    --slate-hover:   #b7a38f;
-    --periwinkle:    #f2f4f3;
-    --pale-slate:    #c8b9a9;
-    --linen:         #f2f4f3;
-    --text-primary:  #ece7e1;
-    --text-muted:    #c2b2a2;
-    --text-dim:      rgba(194,178,162,0.56);
-    --border-soft:   rgba(169,146,125,0.2);
-    --border-mid:    rgba(169,146,125,0.34);
-    --fill-soft:     rgba(169,146,125,0.09);
-    --fill-mid:      rgba(169,146,125,0.15);
-    --fill-hover:    rgba(169,146,125,0.24);
-    --fill-active:   rgba(94,80,63,0.34);
-    --fill-strong:   rgba(94,80,63,0.50);
-    --glow-sm:       rgba(94,80,63,0.2);
-    --glow-md:       rgba(169,146,125,0.28);
-    --success:       #7fbd97;
-    --success-fill:  rgba(127,189,151,0.14);
-    --warning:       #c9a66f;
-    --warning-fill:  rgba(201,166,111,0.14);
-    --danger:        #cf8c8c;
-    --danger-fill:   rgba(207,140,140,0.16);
-    --danger-border: rgba(207,140,140,0.30);
+    /* A more vibrant and modern palette */
+    --midnight:      #1a1a1a; /* Darker, cleaner black */
+    --test:          #2d2d2d; /* Slightly lighter dark shade */
+    --midnight-card: #252525; /* Card background */
+    --midnight-deep: #121212; /* Deepest black for contrast */
+    --slate-blue:    #4A90E2; /* A nice, vibrant blue */
+    --slate-hover:   #5aa1f2; /* Lighter blue for hover */
+    --periwinkle:    #E0E0E0; /* Light gray for text */
+    --pale-slate:    #B0B0B0; /* Muted gray */
+    --linen:         #F5F5F5; /* Almost white for backgrounds */
+    --text-primary:  #FFFFFF; /* Pure white for primary text */
+    --text-muted:    #A0A0A0; /* Muted text color */
+    --text-dim:      rgba(160, 160, 160, 0.7);
+    --border-soft:   rgba(74, 144, 226, 0.2);
+    --border-mid:    rgba(74, 144, 226, 0.4);
+    --fill-soft:     rgba(74, 144, 226, 0.1);
+    --fill-mid:      rgba(74, 144, 226, 0.2);
+    --fill-hover:    rgba(74, 144, 226, 0.3);
+    --fill-active:   rgba(74, 144, 226, 0.4);
+    --fill-strong:   rgba(74, 144, 226, 0.6);
+    --glow-sm:       rgba(74, 144, 226, 0.2);
+    --glow-md:       rgba(74, 144, 226, 0.3);
+    --success:       #7ED321; /* Bright green for success */
+    --success-fill:  rgba(126, 211, 33, 0.15);
+    --warning:       #F5A623; /* Bright orange for warning */
+    --warning-fill:  rgba(245, 166, 35, 0.15);
+    --danger:        #D0021B; /* Strong red for danger */
+    --danger-fill:   rgba(208, 2, 27, 0.15);
+    --danger-border: rgba(208, 2, 27, 0.3);
   }
 
   html, body {
@@ -296,6 +296,28 @@
   .device-name { font-size: 14px; font-weight: 500; color: var(--linen); }
   .device-ip { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 
+  /* SPOTIFY ACCOUNT */
+  .spotify-account {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px; border-radius: 12px;
+    background: var(--fill-soft); border: 1px solid rgba(225,201,167,0.16);
+    margin-bottom: 14px;
+  }
+  .spotify-account__avatar {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--fill-mid); border: 1px solid var(--border-mid);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; color: var(--text-dim); font-weight: 600;
+    flex-shrink: 0;
+  }
+  .spotify-account__avatar img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+  }
+  .spotify-account__avatar img.is-empty { display: none; }
+  .spotify-account__placeholder { font-size: 13px; letter-spacing: 0.5px; }
+  .spotify-account__name { font-size: 14.5px; font-weight: 600; color: var(--linen); }
+  .spotify-account__status { margin-top: 2px; }
+
   /* WEATHER ROW */
   .weather-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -306,13 +328,6 @@
   .weather-row span:nth-child(1) { flex: 1; }
   .weather-row span:nth-child(2) { flex: 1; text-align: center; display: flex; justify-content: center; }
   .weather-row span:nth-child(3) { flex: 1; text-align: right; }
-
-  /* INFO BOX */
-  .info-box {
-    background: var(--fill-soft); border: 1px solid rgba(225,201,167,0.16);
-    border-radius: 10px; padding: 12px 16px; font-size: 12px; color: var(--text-dim);
-    line-height: 1.7;
-  }
 
   /* DIVIDER */
   .divider { height: 1px; background: var(--fill-soft); margin: 12px 0; }
