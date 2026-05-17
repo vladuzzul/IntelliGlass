@@ -31,7 +31,13 @@ const venvDir = path.join(global.root_path, ".venv");
 const venvPython = process.platform === "win32"
 	? path.join(venvDir, "Scripts", "python.exe")
 	: path.join(venvDir, "bin", "python");
-const requirementsPath = path.join(global.root_path, "requirements.txt");
+const defaultRequirementsFile = fs.existsSync(path.join(global.root_path, "requirements-finger.txt"))
+	? "requirements-finger.txt"
+	: "requirements.txt";
+const requirementsFile = process.env.MM_FINGER_REQUIREMENTS || defaultRequirementsFile;
+const requirementsPath = path.join(global.root_path, requirementsFile);
+const useSystemSitePackages = process.env.MM_VENV_SYSTEM_SITE_PACKAGES === "1"
+  || (process.platform === "linux" && process.env.MM_VENV_SYSTEM_SITE_PACKAGES !== "0");
 
 /**
  *
@@ -62,16 +68,41 @@ function isPython3 (candidate) {
 
 /**
  *
+ * @param candidate
+ * @returns {{major: number, minor: number}|null}
+ */
+function getPythonVersion (candidate) {
+	const result = spawnSync(candidate, ["-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"], { encoding: "utf8" });
+	if (result.error || result.status !== 0) {
+		return null;
+	}
+
+	const version = (result.stdout || "").trim();
+	const [majorRaw, minorRaw] = version.split(".");
+	const major = Number.parseInt(majorRaw, 10);
+	const minor = Number.parseInt(minorRaw, 10);
+	if (Number.isNaN(major) || Number.isNaN(minor)) {
+		return null;
+	}
+
+	return { major, minor };
+}
+
+/**
+ *
  */
 function findBasePython () {
 	const candidates = [];
+	if (process.env.MM_FINGER_PYTHON) {
+		candidates.push(process.env.MM_FINGER_PYTHON);
+	}
 	if (process.env.PYTHON) {
 		candidates.push(process.env.PYTHON);
 	}
 	if (process.platform === "win32") {
 		candidates.push("python");
 	} else {
-		candidates.push("python3", "python");
+		candidates.push("python3.12", "python3.11", "python3.10", "python3", "python");
 	}
 
 	for (const candidate of candidates) {
@@ -88,10 +119,25 @@ function findBasePython () {
  */
 function ensureVenv () {
 	if (fs.existsSync(venvPython)) {
+		const venvCfgPath = path.join(venvDir, "pyvenv.cfg");
+		if (useSystemSitePackages && fs.existsSync(venvCfgPath)) {
+			const venvCfg = fs.readFileSync(venvCfgPath, "utf8");
+			const hasSystemSitePackages = (/include-system-site-packages\s*=\s*true/i).test(venvCfg);
+			if (!hasSystemSitePackages) {
+				Log.warn(
+					"Existing .venv was created without system site-packages. "
+					+ "Raspberry Pi camera packages from apt may be unavailable inside finger.py venv."
+				);
+				Log.warn(
+					"Delete .venv and restart to recreate it with system site-packages, "
+					+ "or set MM_VENV_SYSTEM_SITE_PACKAGES=0 to keep strict isolation."
+				);
+			}
+		}
 		return;
 	}
 	if (!fs.existsSync(requirementsPath)) {
-		Log.error("requirements.txt not found. Cannot create venv for finger.py.");
+		Log.error(`${requirementsFile} not found. Cannot create venv for finger.py.`);
 		process.exit(1);
 	}
 
@@ -100,40 +146,70 @@ function ensureVenv () {
 		Log.error("No system Python found to create a virtual environment.");
 		process.exit(1);
 	}
+	const basePythonVersion = getPythonVersion(basePython);
+	if (
+		process.platform === "linux"
+		&& process.arch === "arm64"
+		&& basePythonVersion
+		&& basePythonVersion.major === 3
+		&& basePythonVersion.minor >= 13
+	) {
+		Log.error(
+			"finger.py requires MediaPipe, and Linux ARM64 wheels are not available for Python 3.13+."
+		);
+		Log.error(
+			`Detected ${basePython} (${basePythonVersion.major}.${basePythonVersion.minor}). `
+			+ "Use Python 3.12/3.11 (for example via uv) and recreate .venv."
+		);
+		process.exit(1);
+	}
 
 	Log.log("Creating local Python venv for finger.py...");
-	runSyncOrExit(basePython, ["-m", "venv", venvDir], "Virtualenv creation");
+	const venvArgs = ["-m", "venv"];
+	if (useSystemSitePackages) {
+		venvArgs.push("--system-site-packages");
+	}
+	venvArgs.push(venvDir);
+	runSyncOrExit(basePython, venvArgs, "Virtualenv creation");
 
-	Log.log("Installing Python dependencies from requirements.txt...");
+	Log.log(`Installing Python dependencies from ${requirementsFile}...`);
 	runSyncOrExit(venvPython, ["-m", "pip", "install", "-r", requirementsPath], "Dependency install");
 }
 
-ensureVenv();
+const disableFinger = process.env.MM_DISABLE_FINGER === "1";
 
-const defaultTargetApp = process.platform === "darwin" ? "Electron" : "MagicMirror";
-const targetAppName = process.env.MM_TARGET_APP || defaultTargetApp;
-const fingerEnv = { ...process.env, MM_TARGET_APP: targetAppName };
-const fingerProc = Spawn(venvPython, ["finger.py"], {
-	env: fingerEnv,
-	cwd: global.root_path,
-	stdio: "inherit"
-});
+if (!disableFinger) {
+	ensureVenv();
+}
 
-fingerProc.on("error", (err) => {
-	Log.error("Failed to start finger.py:", err);
-	process.exit(1);
-});
+if (!disableFinger) {
+	const defaultTargetApp = process.platform === "darwin" ? "Electron" : "MagicMirror";
+	const targetAppName = process.env.MM_TARGET_APP || defaultTargetApp;
+	const fingerEnv = { ...process.env, MM_TARGET_APP: targetAppName };
+	const fingerProc = Spawn(venvPython, ["finger.py"], {
+		env: fingerEnv,
+		cwd: global.root_path,
+		stdio: "inherit"
+	});
 
-fingerProc.on("exit", (code, signal) => {
-	if (signal) {
-		Log.error(`finger.py exited due to signal: ${signal}`);
+	fingerProc.on("error", (err) => {
+		Log.error("Failed to start finger.py:", err);
 		process.exit(1);
-	}
-	if (code !== null && code !== 0) {
-		Log.error(`finger.py exited with code: ${code}`);
-		process.exit(1);
-	}
-});
+	});
+
+	fingerProc.on("exit", (code, signal) => {
+		if (signal) {
+			Log.error(`finger.py exited due to signal: ${signal}`);
+			process.exit(1);
+		}
+		if (code !== null && code !== 0) {
+			Log.error(`finger.py exited with code: ${code}`);
+			process.exit(1);
+		}
+	});
+} else {
+	Log.log("MM_DISABLE_FINGER=1 set, skipping finger.py startup.");
+}
 
 if (process.env.MM_CONFIG_FILE) {
 	global.configuration_file = process.env.MM_CONFIG_FILE.replace(`${global.root_path}/`, "");
