@@ -1,4 +1,4 @@
-# IntelliGlass Krontech
+# IntelliGlass 
 
 IntelliGlass este o aplicație de smart mirror construită peste MagicMirror, adaptată pentru Raspberry Pi 4, control prin gesturi, configurare din telefon și asistent vocal AI. Aplicația afișează module clasice de oglindă inteligentă - ceas, calendar, vreme, știri, complimente - și adaugă două componente custom importante:
 
